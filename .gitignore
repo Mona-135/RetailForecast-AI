@@ -1,0 +1,44 @@
+# Environment
+.env
+.venv
+venv/
+ENV/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data and Models
+data/raw/*.zip
+data/predictions/*
+!data/predictions/.gitkeep
+models/saved/*.pkl
+models/saved/*.joblib
+!models/saved/.gitkeep
+*.parquet
+
+# Node / React
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+.npm
+*.log
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Hadoop / Spark scratch
+metastore_db/
+derby.log
+spark-warehouse/

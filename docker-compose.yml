@@ -1,0 +1,194 @@
+version: '3.8'
+
+services:
+  # =========================================================================
+  # 1. APACHE ZOOKEEPER & KAFKA MESSAGE BROKER
+  # =========================================================================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: retail-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+    networks:
+      - retail-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: retail-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - retail-network
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: retail-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: retail-cluster
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+    networks:
+      - retail-network
+
+  # =========================================================================
+  # 2. HADOOP HDFS (NAMENODE & DATANODE)
+  # =========================================================================
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: retail-namenode
+    environment:
+      - CLUSTER_NAME=retail-hdfs
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - HDFS_CONF_dfs_replication=1
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - namenode_data:/hadoop/dfs/name
+    networks:
+      - retail-network
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: retail-datanode
+    depends_on:
+      - namenode
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+    ports:
+      - "9864:9864"
+    volumes:
+      - datanode_data:/hadoop/dfs/data
+    networks:
+      - retail-network
+
+  # =========================================================================
+  # 3. POSTGRESQL & PGADMIN RELATIONAL DATABASE
+  # =========================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: retail-postgres
+    environment:
+      POSTGRES_DB: retail_forecasting
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./sql/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d retail_forecasting"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - retail-network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: retail-pgadmin
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@retail.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    networks:
+      - retail-network
+
+  # =========================================================================
+  # 4. FASTAPI BACKEND API SERVICE
+  # =========================================================================
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: retail-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/retail_forecasting
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      HDFS_NAMENODE_URL: hdfs://namenode:9000
+      DATA_FREQUENCY: weekly
+    volumes:
+      - ./data:/app/data
+      - ./models/saved:/app/models/saved
+      - ./reports/figures:/app/reports/figures
+    networks:
+      - retail-network
+
+  # =========================================================================
+  # 5. REACT VITE FRONTEND SERVICE
+  # =========================================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: retail-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    networks:
+      - retail-network
+
+  # =========================================================================
+  # 6. APACHE SPARK (OPTIONAL CLUSTER RUNNER)
+  # =========================================================================
+  spark:
+    image: bitnami/spark:3.5.1
+    container_name: retail-spark
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+    ports:
+      - "8081:8080"
+      - "7077:7077"
+    networks:
+      - retail-network
+
+# =========================================================================
+# VOLUMES & NETWORKS
+# =========================================================================
+volumes:
+  zookeeper_data:
+  kafka_data:
+  namenode_data:
+  datanode_data:
+  postgres_data:
+
+networks:
+  retail-network:
+    driver: bridge
